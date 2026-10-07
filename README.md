@@ -1,155 +1,133 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# NestJS Reliability Template
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+A scaffold for NestJS services that must not lose data, must not do things twice, and must keep working when a dependency doesn't. It collects the practices and guidelines I start new backend projects from, each one implemented, tested and runnable.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+The code is a small orders service: place an order, reserve stock, send emails, charge a payment, wait for the delivery. The domain is only the example. The patterns, wiring and conventions around it are what you copy.
 
-## Outbox POC
+**Stack:** NestJS 12 · TypeScript (strict, ESM) · PostgreSQL + Drizzle · Kafka · `@nestjs/outbox` · `@nestjs/workflows` · `@nestjs/terminus` · Vitest + PGlite · oxlint
 
-Implementation of the [NestJS transactional outbox tutorial](https://docs.nestjs.com/reliability/outbox) on PostgreSQL + Drizzle.
+## Principles
 
-- `POST /orders` saves the order and its outbox messages in one transaction; `POST /orders/:id/cancel` cancels it.
-- Every event goes through Kafka (`src/infra/messaging/kafka.ts`): `order.placed`, `order.cancelled`, `order.stock-rejected`. One topic per event, keyed by order id, so an order's events stay in order on one partition.
-- The same app consumes `order.placed` from Kafka (consumer group `orders-api-server`): confirmation email (`src/notifications`) and stock reservation (`src/inventory`). Delivery is at-least-once; each consumer deduplicates on the message id through the outbox inbox, and the stock reservation is exactly-once (the inbox record commits with it). A short line publishes `order.stock-rejected` instead of failing.
-- `src/fulfilment`: a durable workflow (`@nestjs/workflows`, state in the `nest_workflows` schema) started in the same transaction as the order. It charges the payment, waits up to 3 days for `POST /fulfilments/:orderId/delivered` (the carrier webhook), and sends a review request 7 days after delivery. No delivery in time, or `order.cancelled` from Kafka before delivery, refunds the charge (the step's compensation). `GET /fulfilments/:orderId` shows where it is. It survives restarts: completed steps are journaled, never run twice.
-- `GET /health/live` (process only) and `GET /health/ready` (`@nestjs/terminus`): 503 when the database is down; Kafka unreachable, outbox lag over 1 min or dead letters report `degraded` with 200, since orders still commit and wait in the outbox. With `HEALTH_SHUTDOWN_DELAY_MS`, readiness answers 503 for that long after SIGTERM before the app closes.
-- `GET /admin/outbox/dead-letters`, `POST /admin/outbox/dead-letters/:id/requeue`, `DELETE /admin/outbox/dead-letters/:id`, `GET /admin/outbox/stats` (header `x-admin-token: $ADMIN_TOKEN`).
+- **Simple first.** Business operations are explicit transaction scripts. Add a pattern only for a failure mode you can name. [`AGENTS.md`](AGENTS.md) holds the full coding and architecture conventions, for people and for AI coding agents.
+- **No dual writes.** State and the messages it produces commit in one database transaction, or not at all.
+- **At-least-once everywhere, idempotent everywhere.** Messages can be redelivered and steps retried. Every consumer and every external call is safe to repeat.
+- **Business failures are outcomes, not errors.** A deterministic failure, like no stock, becomes an event. Retrying it would only block a partition.
+- **Degrade, don't fall over.** A dependency outage is reported, isolated and recovered from. It shouldn't take the service down with it.
+- **The database guards invariants.** Constraints, row locks and conditional updates, not only application checks.
+- **Tested against real PostgreSQL.** E2E tests run the real migrations on PGlite, in-process, with no Docker.
+
+## What's inside
+
+| Practice | Problem it solves | Where |
+|---|---|---|
+| Transaction script + `UnitOfWork` | A business operation is one readable function with one explicit transaction boundary | `src/orders/orders.service.ts`, `src/infra/database/unit-of-work.ts` |
+| [Transactional outbox](https://docs.nestjs.com/reliability/outbox) | The dual-write problem: an event lost after a commit, or sent for a rolled-back change | `outbox.add(tx, …)` in `orders.service.ts`, `src/infra/database/drizzle-outbox.store.ts` |
+| Kafka transport, keyed by entity | One order's events stay in order on one partition, while orders spread across partitions | `src/infra/messaging/kafka.ts` |
+| Idempotent consumers (inbox) | Kafka redelivers after a crash or a rebalance | `src/notifications/order-emails.consumer.ts` |
+| Exactly-once local effects | Inbox record and side effect commit together, so a stock reservation never happens twice | `src/inventory/stock-reservation.consumer.ts` |
+| All-or-nothing with savepoints | A partial failure rolls back its own writes without losing the inbox record | `reserveAllOrNothing()` in the stock consumer |
+| Failure as an event | A poison message would block its partition forever | `order.stock-rejected` |
+| Retries, backoff, dead letters | Transient failures heal themselves; permanent ones wait for a human, with requeue | outbox `retry` in `src/app.module.ts`, `src/outbox-admin` |
+| [Durable workflows](https://docs.nestjs.com/reliability/workflows) (saga) | Processes that span days survive restarts, wait for external events and timers, and undo completed steps | `src/fulfilment/order-fulfilment.workflow.ts` |
+| Idempotency keys on external calls | Payment and email providers don't charge or send twice on a retry | `ctx.step(…, ({ idempotencyKey }) => …)` |
+| Deduplicated webhooks | A carrier retrying its webhook is a no-op | signal `id` in `src/fulfilment/fulfilment.controller.ts` |
+| [Health checks](https://docs.nestjs.com/reliability/terminus) | The orchestrator learns what's broken: liveness never depends on others; readiness fails only on what blocks every request | `src/health` |
+| Graceful shutdown | Deploys don't drop requests or in-flight messages | `enableShutdownHooks()`, `HEALTH_SHUTDOWN_DELAY_MS` |
+| Connection-loss resilience | A database restart doesn't crash the process | `pool.on('error')` in `src/infra/database/drizzle.ts` |
+| Row locks and conditional updates | Concurrent requests can't break an invariant (double cancel, negative stock) | `cancelOrder()`, stock reservation |
+
+## Scaling out
+
+The API is stateless and every background loop coordinates through PostgreSQL leases, so you scale by adding instances:
+
+- **Outbox relay:** instances claim messages under leases and keep per-key order, so several can run at once.
+- **Kafka consumers:** consumers in one group split the partitions; keying by entity id keeps each entity's events in order.
+- **Workflow workers:** instances claim workflow instances under leases. A crashed worker's work moves to another one once its lease expires.
+- **Split roles when load differs:** `OUTBOX_RELAY=off` and `WORKFLOW_WORKER=off` give API-only pods that write messages and start workflows, while dedicated pods publish and run them.
+
+## Run it locally
 
 ```bash
-docker compose up -d
-cp .env.example .env && set -a && . ./.env && set +a
+docker compose up -d            # Postgres, Kafka (KRaft), topic creation, Kafka UI
+cp .env.example .env
+npm install
 npm run db:migrate
-npm run start:dev         # HTTP :3000
-
-curl -X POST localhost:3000/orders -H 'Content-Type: application/json' \
-  -d '{"userId":"user-42","items":[{"productId":"salmon-kibble-2kg","quantity":2}]}'
-
-# Read the events from the terminal...
-docker exec outbox-poc-kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \
-  --include 'order\..*' --from-beginning --property print.key=true --property print.headers=true
+npm run start:dev               # http://localhost:3000
 ```
 
-...or browse topics and messages in Kafka UI at http://localhost:8080.
+- **Kafka UI:** http://localhost:8080
+- **API requests:** open `bruno/` in [Bruno](https://www.usebruno.com) and pick the `local` environment. *Place order* stores the order id for the other requests.
+- **Health:** `GET /health/live`, `GET /health/ready`
 
-`docker compose up -d` starts Postgres, a single-node Kafka (KRaft, `localhost:9092`), a one-shot container that creates the `order.*` topics, and Kafka UI.
+### Try the example flow
 
-`npm run test:e2e` runs the order flow and the package's store contract suites on PGlite.
+| Request | What happens |
+|---|---|
+| `POST /orders` | Order, outbox message and fulfilment workflow commit in one transaction |
+| (Kafka) `order.placed` | The confirmation email and the stock reservation each run once per order |
+| `GET /fulfilments/:orderId` | The workflow is charged and `awaiting-delivery` |
+| `POST /fulfilments/:orderId/delivered` | Carrier webhook. The workflow sleeps 7 days, then sends a review request |
+| `POST /orders/:id/cancel` | `order.cancelled` reaches Kafka; the workflow is cancelled and refunds if not yet delivered |
+| `GET /admin/outbox/stats`, `/admin/outbox/dead-letters` | Outbox backlog, dead letters, requeue and purge (header `x-admin-token`) |
 
-## Description
+Stop Kafka (`docker stop outbox-poc-kafka`) and keep placing orders: `/health/ready` reports `degraded`, orders still commit, and their events go out once Kafka is back.
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+## Configuration
 
-## Project setup
+| Variable | Default | Purpose |
+|---|---|---|
+| `DATABASE_URL` | required | PostgreSQL connection string |
+| `KAFKA_BROKERS` | required | Comma-separated brokers (`localhost:9092`) |
+| `KAFKA_CLIENT_ID` / `KAFKA_GROUP_ID` | `orders-api` | Kafka client id and consumer group (Nest appends `-server` to the group) |
+| `ADMIN_TOKEN` | none (admin routes answer 403) | Token for `/admin/outbox/*` |
+| `OUTBOX_RELAY` | on | `off`: this instance writes outbox messages but doesn't publish them |
+| `WORKFLOW_WORKER` | on | `off`: this instance starts and signals workflows but doesn't run them |
+| `HEALTH_SHUTDOWN_DELAY_MS` | `0` | After SIGTERM, readiness answers 503 for this long before the app closes |
+| `PORT` | `3000` | HTTP port |
+
+## Tests
 
 ```bash
-$ npm install
+npm test                        # unit
+npm run test:e2e                # e2e on PGlite: real migrations, no Docker
+npm run lint
+npx tsc --noEmit -p tsconfig.json
 ```
 
-## Compile and run the project
+The e2e suites drive time and background work by hand: `relay.runOnce()` publishes the outbox, `worker.drain()` runs due workflows, and `ManualWorkflowClock` jumps days ahead. They cover rollbacks, redeliveries, timeouts, compensations and health under outages.
 
-```bash
-# development
-$ npm run start
+## Starting a project from this template
 
-# watch mode
-$ npm run start:dev
+1. Keep `src/infra`, `src/health`, `src/outbox-admin`, the module wiring in `src/app.module.ts`, `docker-compose.yml` and `AGENTS.md`.
+2. Replace `orders`, `inventory`, `notifications` and `fulfilment` with your domain. Mirror their shape: a thin controller, a service with one method per business operation, consumers as `@EventPattern()` controllers, long processes as workflows.
+3. Model tables in `src/infra/schemas/schema.ts`, run `npx drizzle-kit generate`, and add the new topics to `kafka-init` in `docker-compose.yml`.
+4. Before merging anything, check the definition of done in [`AGENTS.md`](AGENTS.md).
 
-# production mode
-$ npm run start:prod
+## Project layout
+
+```text
+src/
+  orders/          HTTP API and transaction scripts (place, cancel)
+  inventory/       Kafka consumer: exactly-once stock reservation
+  notifications/   Kafka consumer: confirmation email; mailer stand-in
+  fulfilment/      durable workflow, carrier webhook, cancellation consumer
+  health/          Terminus liveness/readiness and indicators
+  outbox-admin/    dead letters and stats
+  infra/
+    database/      Drizzle, UnitOfWork, outbox store
+    messaging/     Kafka producer/consumer and outbox transport
+    schemas/       table definitions (migrations are generated from them)
+drizzle/           SQL migrations, workflow store schema included
+test/              e2e suites
+bruno/             API collection
 ```
 
-## Run tests
+## Known gaps
 
-```bash
-# unit tests
-$ npm run test
+Not done yet, and what each one is for:
 
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
-```
-
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
-
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
-```
-
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
-
-## Observability
-
-In production applications, observability is essential for understanding how your system behaves, detecting issues early, and maintaining reliable performance.
-
-[NestJS Observe](https://observe.nestjs.com) automatically instruments your NestJS application, giving you deep visibility into your system with minimal setup:
-
-- **Distributed tracing:** Follow requests across services and understand how they flow through your system.
-- **Waterfall analysis:** Visualize request execution and identify slow operations, bottlenecks, and unexpected delays.
-- **Performance analysis:** Analyze application performance in real time and quickly pinpoint areas that need optimization.
-- **Metrics:** Track key application and infrastructure metrics to understand system health and performance trends.
-- **Logging:** Centralize and correlate logs with traces and other telemetry to make debugging easier.
-- **Error tracking:** Detect errors quickly and investigate their root causes with the surrounding context.
-- **SLA monitoring:** Track service-level objectives and identify when your application is approaching or exceeding defined thresholds.
-- **Alarms and alerts:** Set up alerts for critical errors, performance degradation, SLA violations, and other anomalies so your team can react quickly.
-
-To add it to this project:
-
-```bash
-$ npm install @nestjs/observe
-```
-
-Then follow the [setup guide](https://docs.nestjs.com/observability/overview) - it takes a single import and an app key.
-
-The free plan needs no payment details and covers 300,000 events a month. You can also browse the [live demo](https://www.observe-demo.nestjs.com/dashboard) first - the whole dashboard over a busy service's data, with nothing to install.
-
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Auto-instrument your application with [NestJS Observe](https://observe.nestjs.com). Distributed tracing, metrics, and logging made easy. Error tracking and performance monitoring for your NestJS applications.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+- **Request validation:** a global `ValidationPipe` with DTO classes. Today the services check input by hand.
+- **Idempotency on `POST /orders`:** an `Idempotency-Key` header, so a client retry can't create a second order.
+- **Observability:** structured logs with correlation ids, metrics and tracing.
+- **Domain gaps:** nothing consumes `order.stock-rejected` yet, and the fulfilment workflow charges without waiting for the stock reservation.
+- **Leftover analytics wiring:** the `start:analytics` scripts and `drizzle.analytics.config.ts` point at a service that isn't in the repository.
