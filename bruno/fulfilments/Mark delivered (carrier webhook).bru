@@ -1,0 +1,21 @@
+meta {
+  name: Mark delivered (carrier webhook)
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/fulfilments/{{orderId}}/delivered
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "trackingNumber": "{{trackingNumber}}"
+  }
+}
+
+docs {
+  Returns 202. Repeating it with the same trackingNumber is a no-op (the signal id is `delivered:<trackingNumber>`).
+}

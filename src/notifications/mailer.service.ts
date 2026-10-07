@@ -9,4 +9,8 @@ export class MailerService {
   async sendOrderConfirmation(order: Order): Promise<void> {
     this.logger.log(`Order confirmation for ${order.id} sent to ${order.userId}`);
   }
+
+  async sendReviewRequest(order: Order, idempotencyKey: string): Promise<void> {
+    this.logger.log(`Review request for ${order.id} sent to ${order.userId} (key ${idempotencyKey})`);
+  }
 }

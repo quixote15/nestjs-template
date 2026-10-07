@@ -53,6 +53,7 @@ describe('Orders through Kafka (outbox)', () => {
     // The real migrations, the outbox's tables and the product seed included.
     await migrate(db, { migrationsFolder: fileURLToPath(new URL('../drizzle', import.meta.url)) });
     process.env.OUTBOX_RELAY = 'off'; // no poll loop: the test drives the relay
+    process.env.WORKFLOW_WORKER = 'off'; // no workflow polling: these tests don't run workflows
     moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(getDrizzleToken())
       .useValue(db) // DrizzleOutboxStore injects it too

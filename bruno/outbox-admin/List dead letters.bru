@@ -1,0 +1,22 @@
+meta {
+  name: List dead letters
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/admin/outbox/dead-letters
+  body: none
+  auth: none
+}
+
+params:query {
+  ~topic: order.placed
+}
+
+script:post-response {
+  // Requeue/Purge act on the first dead letter listed.
+  if (Array.isArray(res.body) && res.body.length > 0) {
+    bru.setEnvVar("deadLetterId", res.body[0].id);
+  }
+}
