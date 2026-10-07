@@ -1,11 +1,12 @@
 import { Module } from '@nestjs/common';
 import { DrizzleModule } from '@nestjs/drizzle';
 import { OutboxModule } from '@nestjs/outbox';
-import { drizzle } from 'drizzle-orm/node-postgres';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
+import { createDatabase } from './infra/database/drizzle.js';
 import { DrizzleOutboxStore } from './infra/database/drizzle-outbox.store.js';
 import { KafkaClientModule, KafkaOutboxTransport } from './infra/messaging/kafka.js';
+import { HealthModule } from './health/health.module.js';
 import { InventoryModule } from './inventory/inventory.module.js';
 import { NotificationsModule } from './notifications/notifications.module.js';
 import { OrdersModule } from './orders/orders.module.js';
@@ -16,8 +17,7 @@ import { ConfigModule } from '@nestjs/config';
   imports: [
     ConfigModule.forRoot({isGlobal: true}),
     DrizzleModule.forRootAsync({
-      // A pg pool on DATABASE_URL, closed in onApplicationShutdown(), after the relay drained.
-      useFactory: () => ({ drizzle, connection: process.env.DATABASE_URL! }),
+      useFactory: () => ({ db: createDatabase(process.env.DATABASE_URL!) }),
     }),
     OutboxModule.forRootAsync({
       imports: [KafkaClientModule],
@@ -42,6 +42,7 @@ import { ConfigModule } from '@nestjs/config';
     NotificationsModule,
     InventoryModule,
     OutboxAdminModule,
+    HealthModule,
   ],
   controllers: [AppController],
   // DrizzleOutboxStore registers itself as the outbox's store.

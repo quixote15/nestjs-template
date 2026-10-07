@@ -6,7 +6,7 @@ import { Partitioners } from 'kafkajs';
 export const KAFKA_CLIENT = 'KAFKA_CLIENT';
 
 /** The broker connection shared by the producer and the consumer. */
-function kafkaClientConfig(config: ConfigService) {
+export function kafkaClientConfig(config: ConfigService) {
   return {
     clientId: config.get('KAFKA_CLIENT_ID', 'orders-api'),
     brokers: config.getOrThrow<string>('KAFKA_BROKERS').split(','),
