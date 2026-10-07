@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 /** Only src/, without specs: tsarch reads this tsconfig (it can't follow `extends`). */
 const project = () => filesOfProject('tsconfig.arch.json');
 
-const features = ['orders', 'inventory', 'notifications', 'fulfilment', 'health', 'outbox-admin'];
+const features = ['auth', 'orders', 'inventory', 'notifications', 'fulfilment', 'health', 'outbox-admin'];
 
 type Rule = { check(): Promise<{ dependency?: { sourceLabel: string; targetLabel: string } }[]> };
 

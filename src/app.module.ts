@@ -8,6 +8,7 @@ import { AppService } from './app.service.js';
 import { createDatabase, type Database } from './infra/database/drizzle.js';
 import { DrizzleOutboxStore } from './infra/database/drizzle-outbox.store.js';
 import { KafkaClientModule, KafkaOutboxTransport } from './infra/messaging/kafka.js';
+import { AuthModule } from './auth/auth.module.js';
 import { FulfilmentModule } from './fulfilment/fulfilment.module.js';
 import { HealthModule } from './health/health.module.js';
 import { InventoryModule } from './inventory/inventory.module.js';
@@ -15,10 +16,17 @@ import { NotificationsModule } from './notifications/notifications.module.js';
 import { OrdersModule } from './orders/orders.module.js';
 import { OutboxAdminModule } from './outbox-admin/outbox-admin.module.js';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ObserveModule } from './observe.js';
 
 @Module({
   imports: [
     ConfigModule.forRoot({isGlobal: true}),
+    // After ConfigModule.forRoot(): it loads .env into process.env synchronously, before this line is evaluated.
+    ObserveModule.forRoot({
+      appKey: process.env.OBSERVE_APP_KEY!,
+      appSecret: process.env.OBSERVE_APP_SECRET!,
+      serviceId: 'interview-application',
+    }),
     DrizzleModule.forRootAsync({
       useFactory: () => ({ db: createDatabase(process.env.DATABASE_URL!) }),
     }),
@@ -51,6 +59,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
       }),
     }),
 
+    AuthModule,
     OrdersModule,
     NotificationsModule,
     InventoryModule,
