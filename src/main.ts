@@ -2,9 +2,12 @@ import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module.js';
 import { kafkaConsumerOptions } from './infra/messaging/kafka.js';
+import { ObserveInstrument } from './observe.js';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, {
+    instrument: ObserveInstrument,
+  });
   // The same process consumes the events it publishes: the @EventPattern() handlers.
   app.connectMicroservice(kafkaConsumerOptions(app.get(ConfigService)), { inheritAppConfig: true });
   // On SIGTERM the relay stops claiming, finishes in-flight publishes and releases its leases.

@@ -21,6 +21,15 @@ export const orders = pgTable('orders', {
   status: text('status').$type<'placed' | 'cancelled'>().notNull(),
 });
 
+export const users = pgTable('users', {
+  id: text('id').primaryKey(),
+  /** Lowercased at registration: the unique constraint is what stops two accounts per email. */
+  email: text('email').notNull().unique(),
+  /** scrypt, see src/auth/password.ts. Never the password itself. */
+  passwordHash: text('password_hash').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 // The outbox's tables, read and written by DrizzleOutboxStore.
 
 export const outboxMessages = pgTable(

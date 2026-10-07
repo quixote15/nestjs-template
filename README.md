@@ -68,6 +68,8 @@ npm run start:dev               # http://localhost:3000
 | `GET /fulfilments/:orderId` | The workflow is charged and `awaiting-delivery` |
 | `POST /fulfilments/:orderId/delivered` | Carrier webhook. The workflow sleeps 7 days, then sends a review request |
 | `POST /orders/:id/cancel` | `order.cancelled` reaches Kafka; the workflow is cancelled and refunds if not yet delivered |
+| `POST /auth/register`, `POST /auth/login` | Creates a user, then trades email and password for a JWT access token |
+| `GET /auth/me` | The authenticated example: answers 401 without `Authorization: Bearer <token>` |
 | `GET /admin/outbox/stats`, `/admin/outbox/dead-letters` | Outbox backlog, dead letters, requeue and purge (header `x-admin-token`) |
 
 Stop Kafka (`docker stop outbox-poc-kafka`) and keep placing orders: `/health/ready` reports `degraded`, orders still commit, and their events go out once Kafka is back.
@@ -80,6 +82,8 @@ Stop Kafka (`docker stop outbox-poc-kafka`) and keep placing orders: `/health/re
 | `KAFKA_BROKERS` | required | Comma-separated brokers (`localhost:9092`) |
 | `KAFKA_CLIENT_ID` / `KAFKA_GROUP_ID` | `orders-api` | Kafka client id and consumer group (Nest appends `-server` to the group) |
 | `ADMIN_TOKEN` | none (admin routes answer 403) | Token for `/admin/outbox/*` |
+| `JWT_SECRET` | required | Signs and verifies the access tokens (HS256) |
+| `JWT_EXPIRES_IN` | `1h` | Access token lifetime |
 | `OUTBOX_RELAY` | on | `off`: this instance writes outbox messages but doesn't publish them |
 | `WORKFLOW_WORKER` | on | `off`: this instance starts and signals workflows but doesn't run them |
 | `HEALTH_SHUTDOWN_DELAY_MS` | `0` | After SIGTERM, readiness answers 503 for this long before the app closes |
@@ -107,6 +111,7 @@ The e2e suites drive time and background work by hand: `relay.runOnce()` publish
 
 ```text
 src/
+  auth/            JWT login (email + password), JwtAuthGuard, GET /auth/me
   orders/          HTTP API and transaction scripts (place, cancel)
   inventory/       Kafka consumer: exactly-once stock reservation
   notifications/   Kafka consumer: confirmation email; mailer stand-in
@@ -128,6 +133,7 @@ Not done yet, and what each one is for:
 
 - **Request validation:** a global `ValidationPipe` with DTO classes. Today the services check input by hand.
 - **Idempotency on `POST /orders`:** an `Idempotency-Key` header, so a client retry can't create a second order.
+- **Auth:** no rate limit on `POST /auth/login` yet (`@nestjs/throttler`, against password guessing), no refresh tokens or revocation (a token lives until `JWT_EXPIRES_IN`), and `POST /orders` still takes `userId` from the body instead of the token.
 - **Observability:** structured logs with correlation ids, metrics and tracing.
 - **Domain gaps:** nothing consumes `order.stock-rejected` yet, and the fulfilment workflow charges without waiting for the stock reservation.
 - **Leftover analytics wiring:** the `start:analytics` scripts and `drizzle.analytics.config.ts` point at a service that isn't in the repository.
