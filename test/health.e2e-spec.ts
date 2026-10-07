@@ -20,6 +20,7 @@ describe('Health', () => {
   beforeAll(async () => {
     await migrate(db, { migrationsFolder: fileURLToPath(new URL('../drizzle', import.meta.url)) });
     process.env.OUTBOX_RELAY = 'off';
+    process.env.WORKFLOW_WORKER = 'off'; // no workflow polling: these tests don't run workflows
     process.env.KAFKA_BROKERS = '127.0.0.1:1'; // nothing listens there: Kafka is unreachable
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(getDrizzleToken())

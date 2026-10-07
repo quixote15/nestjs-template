@@ -5,5 +5,6 @@ import { OrderEmailsConsumer } from './order-emails.consumer.js';
 @Module({
   controllers: [OrderEmailsConsumer],
   providers: [MailerService],
+  exports: [MailerService],
 })
 export class NotificationsModule {}

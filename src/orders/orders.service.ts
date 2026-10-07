@@ -1,10 +1,12 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Outbox } from '@nestjs/outbox';
+import { WorkflowClient } from '@nestjs/workflows';
 import { eq, inArray } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import type { Transaction } from '../infra/database/drizzle.js';
 import { UnitOfWork } from '../infra/database/unit-of-work.js';
 import { orders, products } from '../infra/schemas/schema.js';
+import { fulfilmentId, OrderFulfilmentWorkflow } from '../fulfilment/order-fulfilment.workflow.js';
 import type { Order, PlaceOrderDto } from './order.js';
 
 @Injectable()
@@ -12,6 +14,7 @@ export class OrdersService {
   constructor(
     private readonly unitOfWork: UnitOfWork,
     private readonly outbox: Outbox<Transaction>,
+    private readonly workflowClient: WorkflowClient,
   ) {}
 
   async placeOrder({ userId, items }: PlaceOrderDto): Promise<Order> {
@@ -42,6 +45,8 @@ export class OrdersService {
         // Keyed by order: its events share a Kafka partition, so its cancellation comes after it.
         { topic: 'order.placed', key: order.id, payload: order },
       ]);
+      // Same transaction again: no order without its fulfilment, and no fulfilment for a rolled-back order.
+      await this.workflowClient.start(OrderFulfilmentWorkflow, order, { id: fulfilmentId(order.id), transaction: tx });
       return order;
     });
 

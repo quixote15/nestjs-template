@@ -1,17 +1,20 @@
 import { Module } from '@nestjs/common';
-import { DrizzleModule } from '@nestjs/drizzle';
+import { DrizzleModule, getDrizzleToken } from '@nestjs/drizzle';
 import { OutboxModule } from '@nestjs/outbox';
+import { WorkflowsModule, WorkflowStorage } from '@nestjs/workflows';
+import { fromDrizzle, PostgresWorkflowStore } from '@nestjs/workflows/postgres';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
-import { createDatabase } from './infra/database/drizzle.js';
+import { createDatabase, type Database } from './infra/database/drizzle.js';
 import { DrizzleOutboxStore } from './infra/database/drizzle-outbox.store.js';
 import { KafkaClientModule, KafkaOutboxTransport } from './infra/messaging/kafka.js';
+import { FulfilmentModule } from './fulfilment/fulfilment.module.js';
 import { HealthModule } from './health/health.module.js';
 import { InventoryModule } from './inventory/inventory.module.js';
 import { NotificationsModule } from './notifications/notifications.module.js';
 import { OrdersModule } from './orders/orders.module.js';
 import { OutboxAdminModule } from './outbox-admin/outbox-admin.module.js';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 
 @Module({
   imports: [
@@ -37,15 +40,37 @@ import { ConfigModule } from '@nestjs/config';
         },
       }),
     }),
+    WorkflowsModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        // WORKFLOW_WORKER=off: an API-only instance starts and signals workflows, never runs them.
+        worker:
+          config.get('WORKFLOW_WORKER') === 'off'
+            ? false
+            : { concurrency: 10, leaseDuration: '30s', shutdownTimeout: '10s' },
+      }),
+    }),
 
     OrdersModule,
     NotificationsModule,
     InventoryModule,
     OutboxAdminModule,
     HealthModule,
+    FulfilmentModule,
   ],
   controllers: [AppController],
-  // DrizzleOutboxStore registers itself as the outbox's store.
-  providers: [AppService, DrizzleOutboxStore],
+  providers: [
+    AppService,
+    // DrizzleOutboxStore registers itself as the outbox's store.
+    DrizzleOutboxStore,
+    {
+      provide: PostgresWorkflowStore,
+      inject: [getDrizzleToken(), WorkflowStorage],
+      // Its schema (nest_workflows) comes from a drizzle migration, PostgresWorkflowStore.migrationSql(),
+      // applied by db:migrate like every other table: no DDL at startup.
+      useFactory: (db: Database, storage: WorkflowStorage) =>
+        new PostgresWorkflowStore({ executor: fromDrizzle(db), migrate: false }, storage),
+    },
+  ],
 })
 export class AppModule {}
