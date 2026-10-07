@@ -1,0 +1,6 @@
+{
+  "version": "1",
+  "name": "Outbox POC",
+  "type": "collection",
+  "ignore": ["node_modules", ".git"]
+}

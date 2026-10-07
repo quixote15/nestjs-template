@@ -1,0 +1,11 @@
+meta {
+  name: Get fulfilment status
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/fulfilments/{{orderId}}
+  body: none
+  auth: none
+}

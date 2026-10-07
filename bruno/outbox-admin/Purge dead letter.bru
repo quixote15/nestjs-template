@@ -1,0 +1,11 @@
+meta {
+  name: Purge dead letter
+  type: http
+  seq: 3
+}
+
+delete {
+  url: {{baseUrl}}/admin/outbox/dead-letters/{{deadLetterId}}
+  body: none
+  auth: none
+}
