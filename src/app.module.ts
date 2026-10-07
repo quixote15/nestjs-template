@@ -1,18 +1,16 @@
 import { Module } from '@nestjs/common';
 import { DrizzleModule } from '@nestjs/drizzle';
-import { ClientsModule, Transport } from '@nestjs/microservices';
-import { ClientProxyTransport, OutboxModule } from '@nestjs/outbox';
+import { OutboxModule } from '@nestjs/outbox';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import { DrizzleOutboxStore } from './infra/database/drizzle-outbox.store.js';
+import { KafkaClientModule, KafkaOutboxTransport } from './infra/messaging/kafka.js';
 import { InventoryModule } from './inventory/inventory.module.js';
 import { NotificationsModule } from './notifications/notifications.module.js';
 import { OrdersModule } from './orders/orders.module.js';
 import { OutboxAdminModule } from './outbox-admin/outbox-admin.module.js';
 import { ConfigModule } from '@nestjs/config';
-
-export const ANALYTICS_SERVICE = 'ANALYTICS_SERVICE';
 
 @Module({
   imports: [
@@ -22,10 +20,11 @@ export const ANALYTICS_SERVICE = 'ANALYTICS_SERVICE';
       useFactory: () => ({ drizzle, connection: process.env.DATABASE_URL! }),
     }),
     OutboxModule.forRootAsync({
-      imports: [ ],
+      imports: [KafkaClientModule],
+      transports: { kafka: KafkaOutboxTransport },
       useFactory: () => ({
-        // Each message goes to exactly one transport; `local` runs @OnOutboxMessage() handlers.
-        route: (message) => 'local',
+        // Every event goes through Kafka, consumers in this service included (@EventPattern()).
+        route: () => 'kafka',
         relay: {
           enabled: process.env.OUTBOX_RELAY !== 'off',
           pollInterval: '1s',

@@ -39,7 +39,8 @@ export class OrdersService {
 
       // Drizzle's tx: the messages commit or roll back with the order.
       await this.outbox.add(tx, [
-        { topic: 'order.placed', payload: order },
+        // Keyed by order: its events share a Kafka partition, so its cancellation comes after it.
+        { topic: 'order.placed', key: order.id, payload: order },
       ]);
       return order;
     });
@@ -55,7 +56,7 @@ export class OrdersService {
 
       await tx.update(orders).set({ status: 'cancelled' }).where(eq(orders.id, id));
       const order: Order = { ...row, status: 'cancelled' };
-      await this.outbox.add(tx, { topic: 'analytics.order.cancelled', key: order.id, payload: order });
+      await this.outbox.add(tx, { topic: 'order.cancelled', key: order.id, payload: order });
       return order;
     });
 
