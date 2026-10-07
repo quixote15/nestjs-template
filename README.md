@@ -26,20 +26,27 @@
 Implementation of the [NestJS transactional outbox tutorial](https://docs.nestjs.com/reliability/outbox) on PostgreSQL + Drizzle.
 
 - `POST /orders` saves the order and its outbox messages in one transaction; `POST /orders/:id/cancel` cancels it.
-- In-process handlers: confirmation email (`src/notifications`) and exactly-once stock reservation (`src/inventory`).
-- `src/analytics-service`: a TCP microservice with its own database and inbox, receiving `analytics.*` events in order per order.
+- Every event goes through Kafka (`src/infra/messaging/kafka.ts`): `order.placed`, `order.cancelled`, `order.stock-rejected`. One topic per event, keyed by order id, so an order's events stay in order on one partition.
+- The same app consumes `order.placed` from Kafka (consumer group `orders-api-server`): confirmation email (`src/notifications`) and stock reservation (`src/inventory`). Delivery is at-least-once; each consumer deduplicates on the message id through the outbox inbox, and the stock reservation is exactly-once (the inbox record commits with it). A short line publishes `order.stock-rejected` instead of failing.
 - `GET /admin/outbox/dead-letters`, `POST /admin/outbox/dead-letters/:id/requeue`, `DELETE /admin/outbox/dead-letters/:id`, `GET /admin/outbox/stats` (header `x-admin-token: $ADMIN_TOKEN`).
 
 ```bash
 docker compose up -d
 cp .env.example .env && set -a && . ./.env && set +a
 npm run db:migrate
-npm run start:analytics   # TCP :4001
 npm run start:dev         # HTTP :3000
 
 curl -X POST localhost:3000/orders -H 'Content-Type: application/json' \
   -d '{"userId":"user-42","items":[{"productId":"salmon-kibble-2kg","quantity":2}]}'
+
+# Read the events from the terminal...
+docker exec outbox-poc-kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \
+  --include 'order\..*' --from-beginning --property print.key=true --property print.headers=true
 ```
+
+...or browse topics and messages in Kafka UI at http://localhost:8080.
+
+`docker compose up -d` starts Postgres, a single-node Kafka (KRaft, `localhost:9092`), a one-shot container that creates the `order.*` topics, and Kafka UI.
 
 `npm run test:e2e` runs the order flow and the package's store contract suites on PGlite.
 

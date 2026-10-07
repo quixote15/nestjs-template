@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
-import { StockReservationHandler } from './stock-reservation.handler.js';
+import { UnitOfWork } from '../infra/database/unit-of-work.js';
+import { StockReservationConsumer } from './stock-reservation.consumer.js';
 
 @Module({
-  providers: [StockReservationHandler],
+  controllers: [StockReservationConsumer],
+  providers: [UnitOfWork],
 })
 export class InventoryModule {}

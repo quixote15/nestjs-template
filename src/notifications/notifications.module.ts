@@ -1,8 +1,9 @@
 import { Module } from '@nestjs/common';
 import { MailerService } from './mailer.service.js';
-import { OrderEmailsHandler } from './order-emails.handler.js';
+import { OrderEmailsConsumer } from './order-emails.consumer.js';
 
 @Module({
-  providers: [MailerService, OrderEmailsHandler],
+  controllers: [OrderEmailsConsumer],
+  providers: [MailerService],
 })
 export class NotificationsModule {}
