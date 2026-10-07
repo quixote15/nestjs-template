@@ -28,6 +28,7 @@ Implementation of the [NestJS transactional outbox tutorial](https://docs.nestjs
 - `POST /orders` saves the order and its outbox messages in one transaction; `POST /orders/:id/cancel` cancels it.
 - Every event goes through Kafka (`src/infra/messaging/kafka.ts`): `order.placed`, `order.cancelled`, `order.stock-rejected`. One topic per event, keyed by order id, so an order's events stay in order on one partition.
 - The same app consumes `order.placed` from Kafka (consumer group `orders-api-server`): confirmation email (`src/notifications`) and stock reservation (`src/inventory`). Delivery is at-least-once; each consumer deduplicates on the message id through the outbox inbox, and the stock reservation is exactly-once (the inbox record commits with it). A short line publishes `order.stock-rejected` instead of failing.
+- `GET /health/live` (process only) and `GET /health/ready` (`@nestjs/terminus`): 503 when the database is down; Kafka unreachable, outbox lag over 1 min or dead letters report `degraded` with 200, since orders still commit and wait in the outbox. With `HEALTH_SHUTDOWN_DELAY_MS`, readiness answers 503 for that long after SIGTERM before the app closes.
 - `GET /admin/outbox/dead-letters`, `POST /admin/outbox/dead-letters/:id/requeue`, `DELETE /admin/outbox/dead-letters/:id`, `GET /admin/outbox/stats` (header `x-admin-token: $ADMIN_TOKEN`).
 
 ```bash
